@@ -78,6 +78,12 @@ inline IPluginFactory* createPluginFactory(nvinfer1::ILogger& logger)
         createNvOnnxParserPluginFactory_INTERNAL(&logger, NV_ONNX_PARSER_VERSION));
 }
 
+inline nvinfer1::IPluginFactory* createRawPluginFactory(nvinfer1::ILogger& logger)
+{
+    return static_cast<nvinfer1::IPluginFactory*>(
+        createNvOnnxParserPluginFactory_INTERNAL(&logger, NV_ONNX_PARSER_VERSION));
+}
+
 } // namespace
 
 } // namespace nvonnxparser

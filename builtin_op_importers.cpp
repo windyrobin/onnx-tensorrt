@@ -25,6 +25,7 @@
 #include "plugin.hpp"
 #include "FancyActivation.hpp"
 #include "ResizeNearest.hpp"
+#include "ResizeBilinear.hpp"
 #include "Split.hpp"
 #include "InstanceNormalization.hpp"
 
@@ -1145,6 +1146,52 @@ DEFINE_BUILTIN_OP_IMPORTER(LogSoftmax) {
   }
 }
 
+//for aten::log_softmax
+DEFINE_BUILTIN_OP_IMPORTER(log_softmax) {
+  ASSERT(inputs.at(0).is_tensor(), ErrorCode::kUNSUPPORTED_NODE);
+
+  int ndim = inputs.at(0).shape().nbDims;
+  auto axis_input = inputs.at(1);
+  ASSERT(axis_input.is_weights(), ErrorCode::kUNSUPPORTED_NODE);
+  ShapedWeights axis_weights = axis_input.weights();
+  ASSERT(axis_weights.shape.nbDims == 1, ErrorCode::kUNSUPPORTED_NODE);
+  ASSERT(axis_weights.count() == 1, ErrorCode::kUNSUPPORTED_NODE);
+  ASSERT(axis_weights.type == ::ONNX_NAMESPACE::TensorProto::INT64,
+         ErrorCode::kINVALID_NODE);
+  int64_t const *axis_ptr = static_cast<int64_t const *>(axis_weights.values);
+  int64_t axis = *axis_ptr;
+
+  printf("input dim:%d\n", ndim);
+  printf("original axis :%ld\n", axis);
+
+  if( axis < 0 ) {
+    axis += ndim; // Negative indexing
+  } else {
+    --axis; // Don't include the batch dim
+  }
+  ASSERT(0 <= axis && axis < ndim, ErrorCode::kINVALID_NODE);
+
+  nvinfer1::ITensor* tensor_ptr = &inputs.at(0).tensor();
+  nvinfer1::Dims shape = tensor_ptr->getDimensions();
+  // Reshape the tensor so that the softmax axis is 0
+  if (axis > 0)
+  {
+    ASSERT(tensor_ptr = flatten_tensor(ctx, *tensor_ptr, axis), ErrorCode::kUNSUPPORTED_NODE);
+    ASSERT(tensor_ptr = move_tensor_dimension(ctx, *tensor_ptr, axis, 0), ErrorCode::kUNSUPPORTED_NODE);
+  }
+  auto* layer = ctx->network()->addSoftMax(*tensor_ptr);
+  ASSERT(layer, ErrorCode::kUNSUPPORTED_NODE);
+  tensor_ptr = layer->getOutput(0);
+  // Reshape the tensor back if it was reshaped above
+  if (axis > 0)
+  {
+    ASSERT(tensor_ptr = move_tensor_dimension(ctx, *tensor_ptr, 0, axis), ErrorCode::kUNSUPPORTED_NODE);
+    ASSERT(tensor_ptr = reshape_tensor(ctx, *tensor_ptr, shape), ErrorCode::kUNSUPPORTED_NODE);
+  }
+  //return {{tensor_ptr}};
+  return apply_unary_function(ctx, *tensor_ptr, nvinfer1::UnaryOperation::kLOG);
+}
+
 DEFINE_BUILTIN_OP_IMPORTER(LRN) {
   ASSERT(inputs.at(0).is_tensor(), ErrorCode::kUNSUPPORTED_NODE);
   nvinfer1::ITensor& tensor = inputs.at(0).tensor();
@@ -2123,11 +2170,57 @@ DEFINE_BUILTIN_OP_IMPORTER(Upsample) {
       width_scale = scales[3];
     }
   }
+  printf("scale :%f\t%f\n", height_scale, width_scale); 
   auto scale = {height_scale, width_scale};
   auto mode = attrs.get<std::string>("mode", "nearest");
-  ASSERT(mode == "nearest", ErrorCode::kUNSUPPORTED_NODE);
+
+  ASSERT(mode == "nearest" || mode == "linear", ErrorCode::kUNSUPPORTED_NODE);
+  if (mode == "nearest") {
+    RETURN_FIRST_OUTPUT(
+        ctx->addPlugin(
+          new ResizeNearestPlugin(scale), 
+          {&inputs.at(0).tensor()}));
+  } else {
+    RETURN_FIRST_OUTPUT(
+        ctx->addPlugin(
+          new ResizeBilinearPlugin(scale), 
+          {&inputs.at(0).tensor()}));
+  }
+}
+
+//for aten::upsample_bilinear2d, only corner=True support
+DEFINE_BUILTIN_OP_IMPORTER(upsample_bilinear2d) {
+  ASSERT(inputs.at(0).is_tensor(), ErrorCode::kUNSUPPORTED_NODE);
+  nvinfer1::ITensor &tensor = inputs.at(0).tensor();
+  ASSERT(tensor.getDimensions().nbDims == 3, ErrorCode::kUNSUPPORTED_NODE);
+  nvinfer1::Dims old_shape = tensor.getDimensions();
+  printf("input shape:\n");
+  printf("%d\t%d\n", old_shape.d[1], old_shape.d[2]); 
+
+  float height_scale, width_scale;
+  //if (ctx->getOpsetVersion() >= 9) {
+  ASSERT(inputs.size() == 3, ErrorCode::kINVALID_NODE);
+  auto shape_input = inputs.at(1);
+  ASSERT(shape_input.is_weights(), ErrorCode::kUNSUPPORTED_NODE);
+  ShapedWeights shape_weights = shape_input.weights();
+  ASSERT(shape_weights.shape.nbDims == 1, ErrorCode::kUNSUPPORTED_NODE);
+  ASSERT(shape_weights.count() == 2, ErrorCode::kUNSUPPORTED_NODE);
+  ASSERT(shape_weights.type == ::ONNX_NAMESPACE::TensorProto::INT64,
+         ErrorCode::kINVALID_NODE);
+  int64_t const *shape_ptr = static_cast<int64_t const *>(shape_weights.values);
+  printf("out shape:\n"); 
+  printf("%ld\t%ld\n", shape_ptr[0], shape_ptr[1]);
+  //ASSERT(shape_ptr[0] == 1 && shape_ptr[1] == 1,
+  //       ErrorCode::kUNSUPPORTED_NODE);
+  height_scale = shape_ptr[0] / old_shape.d[1];
+  width_scale = shape_ptr[1]/ old_shape.d[2];
+  printf("scale :%f\t%f\n", height_scale, width_scale); 
+  //}
+  auto scale = {height_scale, width_scale};
+  //auto mode = attrs.get<std::string>("mode", "nearest");
+  //ASSERT(mode == "nearest", ErrorCode::kUNSUPPORTED_NODE);
   RETURN_FIRST_OUTPUT(
-      ctx->addPlugin(new ResizeNearestPlugin(scale), {&inputs.at(0).tensor()}));
+      ctx->addPlugin(new ResizeBilinearPlugin(scale), {&inputs.at(0).tensor()}));
 }
 
 } // namespace

@@ -39,7 +39,7 @@ namespace onnx2trt {
 
 class PluginFactory final : public nvonnxparser::IPluginFactory {
   nvinfer1::ILogger* _logger;
-  string_map<plugin_deserializer> _plugin_registry;
+  string_map<plugin_deserializer>& _plugin_registry;
   std::list<UniqueOwnable> _owned_plugin_instances;
 public:
   PluginFactory(nvinfer1::ILogger* logger)

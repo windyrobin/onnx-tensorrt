@@ -257,4 +257,14 @@ inline apply_unary_function(IImporterContext* ctx,
   }
 }
 
+ValueOrStatus<std::vector<TensorOrWeights>>
+inline apply_unary_function(IImporterContext* ctx,
+                            nvinfer1::ITensor& input,
+                            nvinfer1::UnaryOperation func) {
+  auto* layer = ctx->network()->addUnary(
+    input, func);
+  ASSERT(layer, ErrorCode::kUNSUPPORTED_NODE);
+  return {{layer->getOutput(0)}};
+}
+
 } // namespace onnx2trt

@@ -70,6 +70,7 @@ set(ONNX2TRT_PATCH 0)
 set(PLUGIN_SOURCES
   FancyActivation.cu
   ResizeNearest.cu
+  ResizeBilinear.cu
   Split.cu
   InstanceNormalization.cpp
   plugin.cpp
@@ -131,6 +132,7 @@ else()
   list(APPEND GPU_ARCHS
       35
       53
+      60
       61
       70
       )
